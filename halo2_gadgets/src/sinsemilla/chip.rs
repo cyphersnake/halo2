@@ -14,8 +14,8 @@ use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{AssignedCell, Chip, Layouter, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Constraints, Error, Expression, Fixed, Selector,
-        TableColumn, VirtualCells,
+        Advice, Assigned, Column, ConstraintSystem, Constraints, Error, Expression, Fixed,
+        Selector, TableColumn, VirtualCells,
     },
     poly::Rotation,
 };
@@ -250,12 +250,10 @@ where
     F: FixedPoints<pallas::Affine>,
     Commit: CommitDomains<pallas::Affine, F, Hash>,
 {
-    type CellValue = AssignedCell<pallas::Base, pallas::Base>;
-
     type Message = Message<pallas::Base, { sinsemilla::K }, { sinsemilla::C }>;
     type MessagePiece = MessagePiece<pallas::Base, { sinsemilla::K }>;
 
-    type RunningSum = Vec<Self::CellValue>;
+    type RunningSum = Vec<AssignedCell<Assigned<pallas::Base>, pallas::Base>>;
 
     type X = AssignedCell<pallas::Base, pallas::Base>;
     type NonIdentityPoint = NonIdentityEccPoint;
@@ -267,7 +265,7 @@ where
     fn witness_message_piece(
         &self,
         mut layouter: impl Layouter<pallas::Base>,
-        field_elem: Value<pallas::Base>,
+        field_elem: Value<Assigned<pallas::Base>>,
         num_words: usize,
     ) -> Result<Self::MessagePiece, Error> {
         let config = self.config().clone();

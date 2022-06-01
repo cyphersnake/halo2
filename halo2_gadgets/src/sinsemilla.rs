@@ -3,12 +3,12 @@
 //! [Sinsemilla]: https://zips.z.cash/protocol/protocol.pdf#concretesinsemillahash
 use crate::{
     ecc::{self, EccInstructions, FixedPoints},
-    utilities::{FieldValue, RangeConstrained, Var},
+    utilities::{FieldValue, RangeConstrained},
 };
 use group::ff::{Field, PrimeField};
 use halo2_proofs::{
     circuit::{Layouter, Value},
-    plonk::Error,
+    plonk::{Assigned, Error},
 };
 use pasta_curves::arithmetic::CurveAffine;
 use std::fmt::Debug;
@@ -23,9 +23,6 @@ pub mod primitives;
 /// in each word accepted by the Sinsemilla hash, and `MAX_WORDS`, the maximum
 /// number of words that a single hash instance can process.
 pub trait SinsemillaInstructions<C: CurveAffine, const K: usize, const MAX_WORDS: usize> {
-    /// A variable in the circuit.
-    type CellValue: Var<C::Base>;
-
     /// A message composed of [`Self::MessagePiece`]s.
     type Message: From<Vec<Self::MessagePiece>>;
 
@@ -70,7 +67,7 @@ pub trait SinsemillaInstructions<C: CurveAffine, const K: usize, const MAX_WORDS
     fn witness_message_piece(
         &self,
         layouter: impl Layouter<C::Base>,
-        value: Value<C::Base>,
+        value: Value<Assigned<C::Base>>,
         num_words: usize,
     ) -> Result<Self::MessagePiece, Error>;
 
@@ -200,7 +197,7 @@ where
         assert!(num_words <= piece_max_num_words as usize);
 
         // Closure to parse a bitstring (little-endian) into a base field element.
-        let to_base_field = |bits: &[Value<bool>]| -> Value<C::Base> {
+        let to_base_field = |bits: &[Value<bool>]| -> Value<Assigned<C::Base>> {
             let bits: Value<Vec<bool>> = bits.iter().cloned().collect();
             bits.map(|bits| {
                 bits.into_iter().rev().fold(C::Base::zero(), |acc, bit| {
@@ -211,6 +208,7 @@ where
                     }
                 })
             })
+            .into()
         };
 
         let piece_value = to_base_field(bitstring);
@@ -221,7 +219,7 @@ where
     pub fn from_field_elem(
         chip: SinsemillaChip,
         layouter: impl Layouter<C::Base>,
-        field_elem: Value<C::Base>,
+        field_elem: Value<Assigned<C::Base>>,
         num_words: usize,
     ) -> Result<Self, Error> {
         let inner = chip.witness_message_piece(layouter, field_elem, num_words)?;
@@ -258,7 +256,7 @@ where
         assert_eq!(total_bits % K, 0);
         let num_words = total_bits / K;
 
-        Self::from_field_elem(chip, layouter, field_elem, num_words)
+        Self::from_field_elem(chip, layouter, field_elem.into(), num_words)
     }
 }
 

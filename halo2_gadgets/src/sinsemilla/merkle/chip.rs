@@ -2,7 +2,7 @@
 
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, Value},
-    plonk::{Advice, Column, ConstraintSystem, Constraints, Error, Selector},
+    plonk::{Advice, Assigned, Column, ConstraintSystem, Constraints, Error, Selector},
     poly::Rotation,
 };
 use pasta_curves::{arithmetic::FieldExt, pallas};
@@ -450,12 +450,6 @@ where
     F: FixedPoints<pallas::Affine>,
     Commit: CommitDomains<pallas::Affine, F, Hash>,
 {
-    type CellValue = <SinsemillaChip<Hash, Commit, F> as SinsemillaInstructions<
-        pallas::Affine,
-        { sinsemilla::K },
-        { sinsemilla::C },
-    >>::CellValue;
-
     type Message = <SinsemillaChip<Hash, Commit, F> as SinsemillaInstructions<
         pallas::Affine,
         { sinsemilla::K },
@@ -502,7 +496,7 @@ where
     fn witness_message_piece(
         &self,
         layouter: impl Layouter<pallas::Base>,
-        value: Value<pallas::Base>,
+        value: Value<Assigned<pallas::Base>>,
         num_words: usize,
     ) -> Result<Self::MessagePiece, Error> {
         let config = self.config().sinsemilla_config.clone();
@@ -517,7 +511,13 @@ where
         layouter: impl Layouter<pallas::Base>,
         Q: pallas::Affine,
         message: Self::Message,
-    ) -> Result<(Self::NonIdentityPoint, Vec<Vec<Self::CellValue>>), Error> {
+    ) -> Result<
+        (
+            Self::NonIdentityPoint,
+            Vec<Vec<AssignedCell<Assigned<pallas::Base>, pallas::Base>>>,
+        ),
+        Error,
+    > {
         let config = self.config().sinsemilla_config.clone();
         let chip = SinsemillaChip::<Hash, Commit, F>::construct(config);
         chip.hash_to_point(layouter, Q, message)

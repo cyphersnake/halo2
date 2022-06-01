@@ -3,6 +3,7 @@ use ff::PrimeFieldBits;
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{AssignedCell, Cell, Value},
+    plonk::Assigned,
 };
 use std::fmt::Debug;
 
@@ -36,13 +37,13 @@ impl<F: FieldExt + PrimeFieldBits, const K: usize, const MAX_WORDS: usize> std::
 /// cannot exceed the base field's `NUM_BITS`.
 #[derive(Clone, Debug)]
 pub struct MessagePiece<F: FieldExt, const K: usize> {
-    cell_value: AssignedCell<F, F>,
+    cell_value: AssignedCell<Assigned<F>, F>,
     /// The number of K-bit words in this message piece.
     num_words: usize,
 }
 
 impl<F: FieldExt + PrimeFieldBits, const K: usize> MessagePiece<F, K> {
-    pub fn new(cell_value: AssignedCell<F, F>, num_words: usize) -> Self {
+    pub fn new(cell_value: AssignedCell<Assigned<F>, F>, num_words: usize) -> Self {
         assert!(num_words * K < F::NUM_BITS as usize);
         Self {
             cell_value,
@@ -58,11 +59,11 @@ impl<F: FieldExt + PrimeFieldBits, const K: usize> MessagePiece<F, K> {
         self.cell_value.cell()
     }
 
-    pub fn field_elem(&self) -> Value<F> {
+    pub fn field_elem(&self) -> Value<Assigned<F>> {
         self.cell_value.value().cloned()
     }
 
-    pub fn cell_value(&self) -> AssignedCell<F, F> {
+    pub fn cell_value(&self) -> AssignedCell<Assigned<F>, F> {
         self.cell_value.clone()
     }
 }
