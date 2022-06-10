@@ -73,6 +73,8 @@ impl<C: CurveAffine> DoubleAndAdd<C> {
         lambda_2: Column<Advice>,
         main_selector: &dyn Fn(&mut VirtualCells<C::Base>) -> Expression<C::Base>,
     ) -> Self {
+        meta.enable_equality(x_a);
+
         let config = Self {
             x_a,
             x_p,
@@ -187,6 +189,9 @@ impl<C: CurveAffine> DoubleAndAdd<C> {
                 || (x_p == *x_a)
             },
         )?;
+
+        // Copy `x_a`
+        x_a.0.copy_advice(|| "copy x_a", region, self.x_a, offset)?;
 
         // Assign `x_p`
         region.assign_advice(|| "x_p", self.x_p, offset, || x_p)?;
