@@ -569,7 +569,7 @@ pub mod tests {
                         Err(vec![
                             VerifyFailure::ConstraintNotSatisfied {
                                 constraint: (
-                                    (18, "Short fixed-base mul gate").into(),
+                                    (22, "Short fixed-base mul gate").into(),
                                     0,
                                     "last_window_check",
                                 )
@@ -625,7 +625,7 @@ pub mod tests {
                 prover.verify(),
                 Err(vec![
                     VerifyFailure::ConstraintNotSatisfied {
-                        constraint: ((18, "Short fixed-base mul gate").into(), 1, "sign_check")
+                        constraint: ((22, "Short fixed-base mul gate").into(), 1, "sign_check")
                             .into(),
                         location: FailureLocation::InRegion {
                             region: (3, "Short fixed-base mul (most significant word)").into(),
@@ -635,7 +635,7 @@ pub mod tests {
                     },
                     VerifyFailure::ConstraintNotSatisfied {
                         constraint: (
-                            (18, "Short fixed-base mul gate").into(),
+                            (22, "Short fixed-base mul gate").into(),
                             3,
                             "negation_check"
                         )

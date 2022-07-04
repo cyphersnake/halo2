@@ -5,19 +5,17 @@ use super::{
     primitives as sinsemilla, CommitDomains, HashDomains, SinsemillaInstructions,
 };
 use crate::{
-    ecc::{
-        chip::{DoubleAndAdd, NonIdentityEccPoint},
-        FixedPoints,
-    },
-    utilities::lookup_range_check::LookupRangeCheckConfig,
+    ecc::{chip::NonIdentityEccPoint, FixedPoints},
+    utilities::{double_and_add::DoubleAndAdd, lookup_range_check::LookupRangeCheckConfig},
 };
 use std::marker::PhantomData;
 
 use halo2_proofs::{
+    arithmetic::FieldExt,
     circuit::{AssignedCell, Chip, Layouter, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Constraints, Error, Expression, Fixed, Selector,
-        TableColumn, VirtualCells,
+        Advice, Assigned, Column, ConstraintSystem, Constraints, Error, Expression, Fixed,
+        Selector, TableColumn, VirtualCells,
     },
     poly::Rotation,
 };
@@ -48,7 +46,7 @@ where
     /// Fixed column used to load the y-coordinate of the domain $Q$.
     fixed_y_q: Column<Fixed>,
     /// Logic specific to merged double-and-add.
-    double_and_add: DoubleAndAdd,
+    double_and_add: DoubleAndAdd<pallas::Affine>,
     /// Advice column used to load the message.
     bits: Column<Advice>,
     /// Advice column used to witness message pieces. This may or may not be the same
@@ -83,13 +81,13 @@ where
     pub fn lookup_config(&self) -> LookupRangeCheckConfig<pallas::Base, { sinsemilla::K }> {
         self.lookup_config
     }
+}
 
-    /// Derives the expression `q_s3 = (q_s2) * (q_s2 - 1)`.
-    fn q_s3(&self, meta: &mut VirtualCells<pallas::Base>) -> Expression<pallas::Base> {
-        let one = Expression::Constant(pallas::Base::one());
-        let q_s2 = meta.query_fixed(self.q_sinsemilla2, Rotation::cur());
-        q_s2.clone() * (q_s2 - one)
-    }
+/// Derives the expression `q_s3 = (q_s2) * (q_s2 - 1)`.
+fn q_s3(meta: &mut VirtualCells<pallas::Base>, q_s2: Column<Fixed>) -> Expression<pallas::Base> {
+    let one = Expression::Constant(pallas::Base::one());
+    let q_s2 = meta.query_fixed(q_s2, Rotation::cur());
+    q_s2.clone() * (q_s2 - one)
 }
 
 /// A chip that implements 10-bit Sinsemilla using a lookup table and 5 advice columns.
@@ -160,18 +158,72 @@ where
         for advice in advices.iter() {
             meta.enable_equality(*advice);
         }
+        let q_sinsemilla1 = meta.complex_selector();
+        let q_sinsemilla2 = meta.fixed_column();
+        let q_sinsemilla4 = meta.selector();
+
+        // Steady-state selector: q_s1 * (1 - q_s3 / 2)
+        let main_selector = |meta: &mut VirtualCells<pallas::Base>| {
+            let q_s1 = meta.query_selector(q_sinsemilla1);
+            let q_s3_div_2 = q_s3(meta, q_sinsemilla2) * pallas::Base::TWO_INV;
+            let one = Expression::Constant(pallas::Base::one());
+
+            q_s1 * (one - q_s3_div_2)
+        };
+
+        // Final round selector: q_s1 * (q_s3 / 2)
+        let final_selector = |meta: &mut VirtualCells<pallas::Base>| {
+            let q_s1 = meta.query_selector(q_sinsemilla1);
+            let q_s3_div_2 = q_s3(meta, q_sinsemilla2) * pallas::Base::TWO_INV;
+
+            q_s1 * q_s3_div_2
+        };
+
+        // Configure steady-state double-and-add gate
+        let double_and_add = DoubleAndAdd::configure(
+            meta,
+            advices[0],
+            advices[1],
+            advices[3],
+            advices[4],
+            &main_selector,
+        );
+
+        // Initial double-and-add gate
+        meta.create_gate("init check", |meta| {
+            let selector = meta.query_selector(q_sinsemilla4);
+            let y_a_derived = double_and_add.y_a(meta, Rotation::cur());
+            let y_a_witnessed = meta.query_fixed(fixed_y_q, Rotation::cur());
+
+            Constraints::with_selector(selector, Some(("init y_a", y_a_witnessed - y_a_derived)))
+        });
+
+        // Final double-and-add gate
+        meta.create_gate("final check", |meta| {
+            // x_{A,i}
+            let x_a_cur = meta.query_advice(double_and_add.x_a, Rotation::cur());
+            // x_{A,i-1}
+            let x_a_next = meta.query_advice(double_and_add.x_a, Rotation::next());
+            // λ_{2,i}
+            let lambda2_cur = meta.query_advice(double_and_add.lambda_2, Rotation::cur());
+            let y_a_cur = double_and_add.y_a(meta, Rotation::cur());
+
+            let selector = final_selector(meta);
+            let lhs = lambda2_cur * (x_a_cur - x_a_next);
+            let rhs = {
+                let y_a_final = meta.query_advice(advices[3], Rotation::next());
+                y_a_cur + y_a_final
+            };
+
+            Constraints::with_selector(selector, [lhs - rhs])
+        });
 
         let config = SinsemillaConfig::<Hash, Commit, F> {
-            q_sinsemilla1: meta.complex_selector(),
-            q_sinsemilla2: meta.fixed_column(),
-            q_sinsemilla4: meta.selector(),
+            q_sinsemilla1,
+            q_sinsemilla2,
+            q_sinsemilla4,
             fixed_y_q,
-            double_and_add: DoubleAndAdd {
-                x_a: advices[0],
-                x_p: advices[1],
-                lambda_1: advices[3],
-                lambda_2: advices[4],
-            },
+            double_and_add,
             bits: advices[2],
             witness_pieces,
             generator_table: GeneratorTableConfig {
@@ -186,79 +238,6 @@ where
         // Set up lookup argument
         GeneratorTableConfig::configure(meta, config.clone());
 
-        let two = pallas::Base::from(2);
-
-        // Closures for expressions that are derived multiple times
-        // x_r = lambda_1^2 - x_a - x_p
-        let x_r = |meta: &mut VirtualCells<pallas::Base>, rotation| {
-            config.double_and_add.x_r(meta, rotation)
-        };
-
-        // Y_A = (lambda_1 + lambda_2) * (x_a - x_r)
-        let Y_A = |meta: &mut VirtualCells<pallas::Base>, rotation| {
-            config.double_and_add.Y_A(meta, rotation)
-        };
-
-        // Check that the initial x_A, x_P, lambda_1, lambda_2 are consistent with y_Q.
-        // https://p.z.cash/halo2-0.1:sinsemilla-constraints?partial
-        meta.create_gate("Initial y_Q", |meta| {
-            let q_s4 = meta.query_selector(config.q_sinsemilla4);
-            let y_q = meta.query_fixed(config.fixed_y_q, Rotation::cur());
-
-            // Y_A = (lambda_1 + lambda_2) * (x_a - x_r)
-            let Y_A_cur = Y_A(meta, Rotation::cur());
-
-            // 2 * y_q - Y_{A,0} = 0
-            let init_y_q_check = y_q * two - Y_A_cur;
-
-            Constraints::with_selector(q_s4, Some(("init_y_q_check", init_y_q_check)))
-        });
-
-        // https://p.z.cash/halo2-0.1:sinsemilla-constraints?partial
-        meta.create_gate("Sinsemilla gate", |meta| {
-            let q_s1 = meta.query_selector(config.q_sinsemilla1);
-            let q_s3 = config.q_s3(meta);
-
-            let lambda_1_next = meta.query_advice(config.double_and_add.lambda_1, Rotation::next());
-            let lambda_2_cur = meta.query_advice(config.double_and_add.lambda_2, Rotation::cur());
-            let x_a_cur = meta.query_advice(config.double_and_add.x_a, Rotation::cur());
-            let x_a_next = meta.query_advice(config.double_and_add.x_a, Rotation::next());
-
-            // x_r = lambda_1^2 - x_a_cur - x_p
-            let x_r = x_r(meta, Rotation::cur());
-
-            // Y_A = (lambda_1 + lambda_2) * (x_a - x_r)
-            let Y_A_cur = Y_A(meta, Rotation::cur());
-
-            // Y_A = (lambda_1 + lambda_2) * (x_a - x_r)
-            let Y_A_next = Y_A(meta, Rotation::next());
-
-            // lambda2^2 - (x_a_next + x_r + x_a_cur) = 0
-            let secant_line =
-                lambda_2_cur.clone().square() - (x_a_next.clone() + x_r + x_a_cur.clone());
-
-            // lhs - rhs = 0, where
-            //    - lhs = 4 * lambda_2_cur * (x_a_cur - x_a_next)
-            //    - rhs = (2 * Y_A_cur + (2 - q_s3) * Y_A_next + 2 * q_s3 * y_a_final)
-            let y_check = {
-                // lhs = 4 * lambda_2_cur * (x_a_cur - x_a_next)
-                let lhs = lambda_2_cur * pallas::Base::from(4) * (x_a_cur - x_a_next);
-
-                // rhs = 2 * Y_A_cur + (2 - q_s3) * Y_A_next + 2 * q_s3 * y_a_final
-                let rhs = {
-                    // y_a_final is assigned to the lambda1 column on the next offset.
-                    let y_a_final = lambda_1_next;
-
-                    Y_A_cur * two
-                        + (Expression::Constant(two) - q_s3.clone()) * Y_A_next
-                        + q_s3 * two * y_a_final
-                };
-                lhs - rhs
-            };
-
-            Constraints::with_selector(q_s1, [("Secant line", secant_line), ("y check", y_check)])
-        });
-
         config
     }
 }
@@ -271,12 +250,10 @@ where
     F: FixedPoints<pallas::Affine>,
     Commit: CommitDomains<pallas::Affine, F, Hash>,
 {
-    type CellValue = AssignedCell<pallas::Base, pallas::Base>;
-
     type Message = Message<pallas::Base, { sinsemilla::K }, { sinsemilla::C }>;
     type MessagePiece = MessagePiece<pallas::Base, { sinsemilla::K }>;
 
-    type RunningSum = Vec<Self::CellValue>;
+    type RunningSum = Vec<AssignedCell<Assigned<pallas::Base>, pallas::Base>>;
 
     type X = AssignedCell<pallas::Base, pallas::Base>;
     type NonIdentityPoint = NonIdentityEccPoint<pallas::Affine>;
@@ -288,7 +265,7 @@ where
     fn witness_message_piece(
         &self,
         mut layouter: impl Layouter<pallas::Base>,
-        field_elem: Value<pallas::Base>,
+        field_elem: Value<Assigned<pallas::Base>>,
         num_words: usize,
     ) -> Result<Self::MessagePiece, Error> {
         let config = self.config().clone();
