@@ -6,7 +6,7 @@ use crate::{
     circuit::{
         floor_planner::single_pass::SimpleTableLayouter,
         layouter::{RegionColumn, RegionLayouter, RegionShape, TableLayouter},
-        Cell, Layouter, Region, RegionIndex, RegionStart, Table, Value,
+        Cell, DynamicTable, Layouter, Region, RegionIndex, RegionStart, Table, Value,
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Circuit, Column, Error, Fixed, FloorPlanner, Instance,
@@ -185,6 +185,20 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for V1Pass<'p, 'a, F,
             Pass::Measurement(_) => Ok(()),
             Pass::Assignment(pass) => pass.assign_table(name, assignment),
         }
+    }
+
+    fn assign_dynamic_table<A, N, NR>(
+        &mut self,
+        name: N,
+        assignment: A,
+        table_height: usize,
+    ) -> Result<(), Error>
+    where
+        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        N: Fn() -> NR,
+        NR: Into<String>,
+    {
+        Ok(())
     }
 
     fn constrain_instance(

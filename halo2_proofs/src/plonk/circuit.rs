@@ -297,6 +297,22 @@ impl TableColumn {
     }
 }
 
+/// indicate the index of DynamicTableSlice in the DynamicTableLayouter
+#[derive(Debug, Clone, Copy)]
+pub struct DynamicTableSlice(usize);
+
+/// A advice column of a dynamic lookup table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DynamicTableColumn {
+    inner: Column<Advice>,
+}
+
+impl DynamicTableColumn {
+    pub(crate) fn inner(self) -> Column<Advice> {
+        self.inner
+    }
+}
+
 /// This trait allows a [`Circuit`] to direct some backend to assign a witness
 /// for a constraint system.
 pub trait Assignment<F: Field> {
@@ -906,6 +922,9 @@ pub struct ConstraintSystem<F: Field> {
     // input expressions and a sequence of table expressions involved in the lookup.
     pub(crate) lookups: Vec<lookup::Argument<F>>,
 
+    // Vector of dynamic lookup arguments, separate from fixed lookup
+    pub(crate) dlookups: Vec<lookup::Argument<F>>,
+
     // Vector of fixed columns, which can be used to store constant values
     // that are copied into advice columns.
     pub(crate) constants: Vec<Column<Fixed>>,
@@ -927,6 +946,7 @@ pub struct PinnedConstraintSystem<'a, F: Field> {
     fixed_queries: &'a Vec<(Column<Fixed>, Rotation)>,
     permutation: &'a permutation::Argument,
     lookups: &'a Vec<lookup::Argument<F>>,
+    dlookups: &'a Vec<lookup::Argument<F>>,
     constants: &'a Vec<Column<Fixed>>,
     minimum_degree: &'a Option<usize>,
 }
@@ -956,6 +976,7 @@ impl<F: Field> Default for ConstraintSystem<F> {
             instance_queries: Vec::new(),
             permutation: permutation::Argument::new(),
             lookups: Vec::new(),
+            dlookups: Vec::new(),
             constants: vec![],
             minimum_degree: None,
         }
@@ -978,6 +999,7 @@ impl<F: Field> ConstraintSystem<F> {
             instance_queries: &self.instance_queries,
             permutation: &self.permutation,
             lookups: &self.lookups,
+            dlookups: &self.dlookups,
             constants: &self.constants,
             minimum_degree: &self.minimum_degree,
         }
@@ -1027,6 +1049,36 @@ impl<F: Field> ConstraintSystem<F> {
         let index = self.lookups.len();
 
         self.lookups.push(lookup::Argument::new(table_map));
+
+        index
+    }
+
+    /// Lookup argument using a dynamic table or subset of a dynamic table.
+    ///
+    /// The <'table> lifetime constrains all `DynamicTableColumn`s used here to be derived
+    /// from the same `DynamicTable`.
+    fn lookup_dynamic(
+        &mut self,
+        table_map: impl FnOnce(&mut VirtualCells<'_, F>) -> Vec<(Expression<F>, DynamicTableColumn)>,
+        // Selector in input expression. We look up (tag, input) when `selector` is enabled.
+        selector: Expression<F>,
+    ) -> usize {
+        let mut cells = VirtualCells::new(self);
+        let table_map = table_map(&mut cells)
+            .into_iter()
+            .map(|(input, table)| {
+                if input.contains_simple_selector() {
+                    panic!("expression containing simple selector supplied to lookup argument");
+                }
+
+                let table = cells.query_advice(table.inner(), Rotation::cur());
+
+                (input, table)
+            })
+            .collect();
+
+        let index = self.dlookups.len();
+        self.dlookups.push(lookup::Argument::new(table_map));
 
         index
     }
@@ -1323,6 +1375,13 @@ impl<F: Field> ConstraintSystem<F> {
     pub fn lookup_table_column(&mut self) -> TableColumn {
         TableColumn {
             inner: self.fixed_column(),
+        }
+    }
+
+    /// Allocates a new advice column that can be used in a dynamic lookup table.
+    pub fn dlookup_table_column(&mut self) -> DynamicTableColumn {
+        DynamicTableColumn {
+            inner: self.advice_column(),
         }
     }
 

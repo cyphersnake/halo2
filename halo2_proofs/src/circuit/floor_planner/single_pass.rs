@@ -7,12 +7,14 @@ use ff::Field;
 
 use crate::{
     circuit::{
-        layouter::{RegionColumn, RegionLayouter, RegionShape, TableLayouter},
-        Cell, Layouter, Region, RegionIndex, RegionStart, Table, Value,
+        layouter::{
+            DynamicTableLayouter, RegionColumn, RegionLayouter, RegionShape, TableLayouter,
+        },
+        Cell, DynamicTable, Layouter, Region, RegionIndex, RegionStart, Table, Value,
     },
     plonk::{
-        Advice, Any, Assigned, Assignment, Circuit, Column, Error, Fixed, FloorPlanner, Instance,
-        Selector, TableColumn,
+        Advice, Any, Assigned, Assignment, Circuit, Column, DynamicTableColumn, DynamicTableSlice,
+        Error, Fixed, FloorPlanner, Instance, Selector, TableColumn,
     },
 };
 
@@ -46,6 +48,8 @@ pub struct SingleChipLayouter<'a, F: Field, CS: Assignment<F> + 'a> {
     columns: HashMap<RegionColumn, usize>,
     /// Stores the table fixed columns.
     table_columns: Vec<TableColumn>,
+    /// Stores the dynamic table columns.
+    dynamic_table_columns: Vec<DynamicTableColumn>,
     _marker: PhantomData<F>,
 }
 
@@ -67,6 +71,7 @@ impl<'a, F: Field, CS: Assignment<F>> SingleChipLayouter<'a, F, CS> {
             regions: vec![],
             columns: HashMap::default(),
             table_columns: vec![],
+            dynamic_table_columns: vec![],
             _marker: PhantomData,
         };
         Ok(ret)
@@ -126,6 +131,7 @@ impl<'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for SingleChipLayouter<'a
                 .columns
                 .entry(Column::<Any>::from(constants_column).into())
                 .or_default();
+
             for (constant, advice) in constants_to_assign {
                 self.cs.assign_fixed(
                     || format!("Constant({:?})", constant.evaluate()),
@@ -144,6 +150,23 @@ impl<'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for SingleChipLayouter<'a
         }
 
         Ok(result)
+    }
+
+    fn assign_dynamic_table<A, N, NR>(
+        &mut self,
+        name: N,
+        mut assignment: A,
+        table_height: usize,
+    ) -> Result<(), Error>
+    where
+        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        N: Fn() -> NR,
+        NR: Into<String>,
+    {
+        self.cs.enter_region(name);
+        let mut dtable = SimpleDynamicTableLayouter::new(self.cs, &self.dynamic_table_columns);
+        self.cs.exit_region();
+        Ok(())
     }
 
     fn assign_table<A, N, NR>(&mut self, name: N, mut assignment: A) -> Result<(), Error>
@@ -378,6 +401,94 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> RegionLayouter<F>
 /// - The inner `Value` tracks whether the underlying `Assignment` is evaluating
 ///   witnesses or not.
 type DefaultTableValue<F> = Option<Value<Assigned<F>>>;
+
+/// TableSlice is a table in the stacked table group
+/// where they share the same columns
+#[derive(Debug, Clone, Copy)]
+pub struct TableSlice {
+    start_row: usize,
+    table_height: usize,
+    table_width: usize,
+}
+
+pub(crate) struct SimpleDynamicTableLayouter<'r, 'a, F: Field, CS: Assignment<F> + 'a> {
+    cs: &'a mut CS,
+    used_columns: &'r [DynamicTableColumn],
+    pub(crate) default_and_assigned: HashMap<DynamicTableColumn, (DefaultTableValue<F>, Vec<bool>)>,
+    max_width: usize, // maximum width for stacked table slice
+    tables: Vec<TableSlice>,
+}
+
+impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> fmt::Debug
+    for SimpleDynamicTableLayouter<'r, 'a, F, CS>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SimpleDynamicTableLayouter")
+            .field("used_columns", &self.used_columns)
+            .field("default_and_assigned", &self.default_and_assigned)
+            .field("max_width", &self.max_width)
+            .field("tables", &self.tables)
+            .finish()
+    }
+}
+
+impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> SimpleDynamicTableLayouter<'r, 'a, F, CS> {
+    pub(crate) fn new(cs: &'a mut CS, used_columns: &'r [DynamicTableColumn]) -> Self {
+        SimpleDynamicTableLayouter {
+            cs,
+            used_columns,
+            default_and_assigned: HashMap::default(),
+            max_width: 0,
+            tables: Vec::new(),
+        }
+    }
+}
+
+impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> DynamicTableLayouter<F>
+    for SimpleDynamicTableLayouter<'r, 'a, F, CS>
+{
+    fn assign_cell<'v>(
+        &'v mut self,
+        annotation: &'v (dyn Fn() -> String + 'v),
+        table: DynamicTableSlice,
+        column: DynamicTableColumn,
+        offset: usize,
+        to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
+    ) -> Result<(), Error> {
+        if self.used_columns.contains(&column) {
+            return Err(Error::Synthesis); // TODO better error
+        }
+
+        let entry = self.default_and_assigned.entry(column).or_default();
+
+        let mut value = Value::unknown();
+        self.cs.assign_advice(
+            annotation,
+            column.inner(),
+            offset, // tables are always assigned starting at row 0
+            || {
+                let res = to();
+                value = res;
+                res
+            },
+        )?;
+
+        match (entry.0.is_none(), offset) {
+            // Use the value at offset 0 as the default value for this table column.
+            (true, 0) => entry.0 = Some(value),
+            // Since there is already an existing default value for this table column,
+            // the caller should not be attempting to assign another value at offset 0.
+            (false, 0) => return Err(Error::Synthesis), // TODO better error
+            _ => (),
+        }
+        if entry.1.len() <= offset {
+            entry.1.resize(offset + 1, false);
+        }
+        entry.1[offset] = true;
+
+        Ok(())
+    }
+}
 
 pub(crate) struct SimpleTableLayouter<'r, 'a, F: Field, CS: Assignment<F> + 'a> {
     cs: &'a mut CS,

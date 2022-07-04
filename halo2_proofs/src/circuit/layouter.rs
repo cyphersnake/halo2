@@ -7,7 +7,10 @@ use std::fmt;
 use ff::Field;
 
 use super::{Cell, RegionIndex, Value};
-use crate::plonk::{Advice, Any, Assigned, Column, Error, Fixed, Instance, Selector, TableColumn};
+use crate::plonk::{
+    Advice, Any, Assigned, Column, DynamicTableColumn, DynamicTableSlice, Error, Fixed, Instance,
+    Selector, TableColumn,
+};
 
 /// Helper trait for implementing a custom [`Layouter`].
 ///
@@ -118,6 +121,23 @@ pub trait TableLayouter<F: Field>: fmt::Debug {
         annotation: &'v (dyn Fn() -> String + 'v),
         column: TableColumn,
         offset: usize,
+        to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
+    ) -> Result<(), Error>;
+}
+
+/// Helper trait for implementing a custom [`Layouter`].
+///
+/// This trait is used for implementing dynamic table assignments
+pub trait DynamicTableLayouter<F: Field>: fmt::Debug {
+    /// Assigns a value to a dynamic table cell
+    ///
+    /// Returns an error if the table cell has already been assigned to.
+    fn assign_cell<'v>(
+        &'v mut self,
+        annotation: &'v (dyn Fn() -> String + 'v),
+        table: DynamicTableSlice,
+        column: DynamicTableColumn,
+        offset: usize, // offset is respect to DynamicTableSlice
         to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
     ) -> Result<(), Error>;
 }

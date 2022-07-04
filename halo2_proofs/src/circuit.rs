@@ -1,12 +1,15 @@
 //! Traits and structs for implementing circuit components.
 
-use std::{convert::TryInto, fmt, marker::PhantomData};
+use std::{alloc::Layout, convert::TryInto, fmt, marker::PhantomData};
 
 use ff::Field;
 
 use crate::{
     arithmetic::FieldExt,
-    plonk::{Advice, Any, Assigned, Column, Error, Fixed, Instance, Selector, TableColumn},
+    plonk::{
+        Advice, Any, Assigned, Column, DynamicTableColumn, DynamicTableSlice, Error, Fixed,
+        Instance, Selector, TableColumn,
+    },
 };
 
 mod value;
@@ -352,6 +355,45 @@ impl<'r, F: Field> Region<'r, F> {
     }
 }
 
+/// wrapper for DynamicTableLayouter
+#[derive(Debug)]
+pub struct DynamicTable<'r, F: Field> {
+    table: &'r mut dyn layouter::DynamicTableLayouter<F>,
+}
+
+impl<'r, F: Field> From<&'r mut dyn layouter::DynamicTableLayouter<F>> for DynamicTable<'r, F> {
+    fn from(table: &'r mut dyn layouter::DynamicTableLayouter<F>) -> Self {
+        DynamicTable { table }
+    }
+}
+
+impl<'r, F: Field> DynamicTable<'r, F> {
+    /// Assigns a fixed value to a table cell.
+    ///
+    /// Returns an error if the table cell has already been assigned to.
+    ///
+    /// Even though `to` has `FnMut` bounds, it is guaranteed to be called at most once.
+    pub fn assign_cell<'v, V, VR, A, AR>(
+        &'v mut self,
+        annotation: A,
+        table: DynamicTableSlice,
+        column: DynamicTableColumn,
+        offset: usize,
+        mut to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnMut() -> Value<VR> + 'v,
+        VR: Into<Assigned<F>>,
+        A: Fn() -> AR,
+        AR: Into<String>,
+    {
+        self.table
+            .assign_cell(&|| annotation().into(), table, column, offset, &mut || {
+                to().into_field()
+            })
+    }
+}
+
 /// A lookup table in the circuit.
 #[derive(Debug)]
 pub struct Table<'r, F: Field> {
@@ -432,6 +474,23 @@ pub trait Layouter<F: Field> {
         N: Fn() -> NR,
         NR: Into<String>;
 
+    /// Assign a dynamic table region to an absolute row number
+    /// This is assigned a Tag that is unique within its stacking group.
+    ///
+    /// TODO: add Fixed column support
+    /// NB: Any fixed columns used in dynamic tables cannot be reused
+    /// as in fixed tables.
+    fn assign_dynamic_table<A, N, NR>(
+        &mut self,
+        name: N,
+        assignment: A,
+        table_height: usize,
+    ) -> Result<(), Error>
+    where
+        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        N: Fn() -> NR,
+        NR: Into<String>;
+
     /// Constrains a [`Cell`] to equal an instance column's row value at an
     /// absolute position.
     fn constrain_instance(
@@ -495,6 +554,20 @@ impl<'a, F: Field, L: Layouter<F> + 'a> Layouter<F> for NamespacedLayouter<'a, F
         NR: Into<String>,
     {
         self.0.assign_table(name, assignment)
+    }
+
+    fn assign_dynamic_table<A, N, NR>(
+        &mut self,
+        name: N,
+        assignment: A,
+        table_height: usize,
+    ) -> Result<(), Error>
+    where
+        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        N: Fn() -> NR,
+        NR: Into<String>,
+    {
+        self.0.assign_dynamic_table(name, assignment, table_height)
     }
 
     fn constrain_instance(
