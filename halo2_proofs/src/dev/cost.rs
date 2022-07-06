@@ -109,6 +109,10 @@ impl<F: Field> Assignment<F> for Assembly {
         Ok(())
     }
 
+    fn max_usable_row(&self) -> usize {
+        0
+    }
+
     fn fill_from_row(
         &mut self,
         _: Column<Fixed>,

@@ -50,6 +50,9 @@ pub struct SingleChipLayouter<'a, F: Field, CS: Assignment<F> + 'a> {
     table_columns: Vec<TableColumn>,
     /// Stores the dynamic table columns.
     dynamic_table_columns: Vec<DynamicTableColumn>,
+    /// Stores the dynamic table slices, they share columns
+    tables: Vec<TableSlice>,
+    dynamic_table_height: usize,
     _marker: PhantomData<F>,
 }
 
@@ -72,6 +75,8 @@ impl<'a, F: Field, CS: Assignment<F>> SingleChipLayouter<'a, F, CS> {
             columns: HashMap::default(),
             table_columns: vec![],
             dynamic_table_columns: vec![],
+            tables: vec![],
+            dynamic_table_height: 0,
             _marker: PhantomData,
         };
         Ok(ret)
@@ -159,13 +164,49 @@ impl<'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for SingleChipLayouter<'a
         table_height: usize,
     ) -> Result<(), Error>
     where
-        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        A: FnMut(DynamicTable<'_, F>, usize) -> Result<(), Error>,
         N: Fn() -> NR,
         NR: Into<String>,
     {
+        let old_height = self.dynamic_table_height;
+        assert!(old_height + table_height <= self.cs.max_usable_row());
+
         self.cs.enter_region(name);
         let mut dtable = SimpleDynamicTableLayouter::new(self.cs, &self.dynamic_table_columns);
+        {
+            let table: &mut dyn DynamicTableLayouter<F> = &mut dtable;
+            assignment(table.into(), table_height)
+        }?;
+        self.dynamic_table_height = old_height + table_height;
+        let default_and_assigned = dtable.default_and_assigned;
         self.cs.exit_region();
+
+        // Check that all table columns have the same length `first_unused`,
+        // and all cells up to that length are assigned.
+        let first_unused = {
+            match default_and_assigned
+                .values()
+                .map(|(_, assigned)| {
+                    if assigned.iter().all(|b| *b) {
+                        Some(assigned.len())
+                    } else {
+                        None
+                    }
+                })
+                .reduce(|acc, item| match (acc, item) {
+                    (Some(a), Some(b)) if a == b => Some(a),
+                    _ => None,
+                }) {
+                Some(Some(len)) => len,
+                _ => return Err(Error::Synthesis), // TODO better error
+            }
+        };
+
+        // Record these columns so that we can prevent them from being used again.
+        for column in default_and_assigned.keys() {
+            self.dynamic_table_columns.push(*column);
+        }
+
         Ok(())
     }
 
@@ -416,7 +457,6 @@ pub(crate) struct SimpleDynamicTableLayouter<'r, 'a, F: Field, CS: Assignment<F>
     used_columns: &'r [DynamicTableColumn],
     pub(crate) default_and_assigned: HashMap<DynamicTableColumn, (DefaultTableValue<F>, Vec<bool>)>,
     max_width: usize, // maximum width for stacked table slice
-    tables: Vec<TableSlice>,
 }
 
 impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> fmt::Debug
@@ -427,7 +467,6 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> fmt::Debug
             .field("used_columns", &self.used_columns)
             .field("default_and_assigned", &self.default_and_assigned)
             .field("max_width", &self.max_width)
-            .field("tables", &self.tables)
             .finish()
     }
 }
@@ -439,7 +478,6 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> SimpleDynamicTableLayouter<'r, 'a
             used_columns,
             default_and_assigned: HashMap::default(),
             max_width: 0,
-            tables: Vec::new(),
         }
     }
 }

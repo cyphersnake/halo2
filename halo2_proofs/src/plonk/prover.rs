@@ -240,6 +240,10 @@ pub fn create_proof<
                     Ok(())
                 }
 
+                fn max_usable_row(&self) -> usize {
+                    0
+                }
+
                 fn fill_from_row(
                     &mut self,
                     _: Column<Fixed>,

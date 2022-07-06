@@ -355,7 +355,7 @@ impl<'r, F: Field> Region<'r, F> {
     }
 }
 
-/// wrapper for DynamicTableLayouter
+/// wrapper around DynamicTableLayouter
 #[derive(Debug)]
 pub struct DynamicTable<'r, F: Field> {
     table: &'r mut dyn layouter::DynamicTableLayouter<F>,
@@ -487,7 +487,7 @@ pub trait Layouter<F: Field> {
         table_height: usize,
     ) -> Result<(), Error>
     where
-        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        A: FnMut(DynamicTable<'_, F>, usize) -> Result<(), Error>,
         N: Fn() -> NR,
         NR: Into<String>;
 
@@ -563,7 +563,7 @@ impl<'a, F: Field, L: Layouter<F> + 'a> Layouter<F> for NamespacedLayouter<'a, F
         table_height: usize,
     ) -> Result<(), Error>
     where
-        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        A: FnMut(DynamicTable<'_, F>, usize) -> Result<(), Error>,
         N: Fn() -> NR,
         NR: Into<String>,
     {

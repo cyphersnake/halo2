@@ -297,9 +297,10 @@ impl TableColumn {
     }
 }
 
-/// indicate the index of DynamicTableSlice in the DynamicTableLayouter
+/// (index, tag) indicates the index of DynamicTableSlice in the DynamicTableLayouter
+/// and the tag of the table slice
 #[derive(Debug, Clone, Copy)]
-pub struct DynamicTableSlice(usize);
+pub struct DynamicTableSlice(usize, usize);
 
 /// A advice column of a dynamic lookup table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -389,6 +390,9 @@ pub trait Assignment<F: Field> {
         right_column: Column<Any>,
         right_row: usize,
     ) -> Result<(), Error>;
+
+    /// return the maximum usable row
+    fn max_usable_row(&self) -> usize;
 
     /// Fills a fixed `column` starting from the given `row` with value `to`.
     fn fill_from_row(

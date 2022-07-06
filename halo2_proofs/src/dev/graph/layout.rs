@@ -481,6 +481,10 @@ impl<F: Field> Assignment<F> for Layout {
         Ok(())
     }
 
+    fn max_usable_row(&self) -> usize {
+        0
+    }
+
     fn fill_from_row(
         &mut self,
         _: Column<Fixed>,

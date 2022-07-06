@@ -194,7 +194,7 @@ impl<'p, 'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for V1Pass<'p, 'a, F,
         table_height: usize,
     ) -> Result<(), Error>
     where
-        A: FnMut(DynamicTable<'_, F>) -> Result<(), Error>,
+        A: FnMut(DynamicTable<'_, F>, usize) -> Result<(), Error>,
         N: Fn() -> NR,
         NR: Into<String>,
     {

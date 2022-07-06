@@ -149,6 +149,10 @@ impl<F: Field> Assignment<F> for Assembly<F> {
             .copy(left_column, left_row, right_column, right_row)
     }
 
+    fn max_usable_row(&self) -> usize {
+        self.usable_rows.len()
+    }
+
     fn fill_from_row(
         &mut self,
         column: Column<Fixed>,

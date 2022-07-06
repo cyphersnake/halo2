@@ -148,6 +148,10 @@ impl<F: Field> Assignment<F> for Graph {
         Ok(())
     }
 
+    fn max_usable_row(&self) -> usize {
+        self.usable_rows.len()
+    }
+
     fn fill_from_row(
         &mut self,
         _: Column<Fixed>,
