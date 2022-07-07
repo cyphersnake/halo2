@@ -13,6 +13,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 
+#[cfg(feature = "dev-graph")]
 #[test]
 fn lookup_dynamic() {
     #[derive(Clone, Debug)]
@@ -220,8 +221,18 @@ fn lookup_dynamic() {
     let prover = MockProver::run(k, &circuit, vec![odd_lookup]).unwrap();
     assert_eq!(prover.verify(), Ok(()));
 
+    use plotters::prelude::*;
     // If we pass in a public input containing only even numbers,
     // the odd number lookup will fail.
     let prover = MockProver::run(k, &circuit, vec![even_lookup]).unwrap();
-    assert!(prover.verify().is_err())
+    assert!(prover.verify().is_err());
+
+    let root = BitMapBackend::new("lookup-any-layout.png", (1024, 3096)).into_drawing_area();
+    root.fill(&WHITE).unwrap();
+    let root = root
+        .titled("lookup any layout", ("sans-serif", 60))
+        .unwrap();
+    halo2_proofs::dev::CircuitLayout::default()
+        .render(4, &circuit, &root)
+        .unwrap();
 }
