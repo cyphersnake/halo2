@@ -314,6 +314,24 @@ impl DynamicTableColumn {
     }
 }
 
+/// A tag column for dynamic lookup tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TagColumn {
+    inner: Column<Fixed>,
+}
+
+impl TagColumn {
+    pub(crate) fn inner(self) -> Column<Fixed> {
+        self.inner
+    }
+}
+
+impl From<Column<Fixed>> for TagColumn {
+    fn from(inner: Column<Fixed>) -> Self {
+        TagColumn { inner }
+    }
+}
+
 /// This trait allows a [`Circuit`] to direct some backend to assign a witness
 /// for a constraint system.
 pub trait Assignment<F: Field> {
@@ -904,6 +922,7 @@ pub struct ConstraintSystem<F: Field> {
     pub(crate) num_advice_columns: usize,
     pub(crate) num_instance_columns: usize,
     pub(crate) num_selectors: usize,
+    pub(crate) num_dlookup_columns: usize,
 
     /// This is a cached vector that maps virtual selectors to the concrete
     /// fixed column that they were compressed into. This is just used by dev
@@ -928,6 +947,9 @@ pub struct ConstraintSystem<F: Field> {
 
     // Vector of dynamic lookup arguments, separate from fixed lookup
     pub(crate) dlookups: Vec<lookup::Argument<F>>,
+    // tag column for the dynamic lookup table
+    // currently, we only support one stack table group
+    pub(crate) tag_column: Option<TagColumn>,
 
     // Vector of fixed columns, which can be used to store constant values
     // that are copied into advice columns.
@@ -972,6 +994,7 @@ impl<F: Field> Default for ConstraintSystem<F> {
             num_advice_columns: 0,
             num_instance_columns: 0,
             num_selectors: 0,
+            num_dlookup_columns: 0,
             selector_map: vec![],
             gates: vec![],
             fixed_queries: Vec::new(),
@@ -981,6 +1004,7 @@ impl<F: Field> Default for ConstraintSystem<F> {
             permutation: permutation::Argument::new(),
             lookups: Vec::new(),
             dlookups: Vec::new(),
+            tag_column: None,
             constants: vec![],
             minimum_degree: None,
         }
@@ -1383,10 +1407,15 @@ impl<F: Field> ConstraintSystem<F> {
     }
 
     /// Allocates a new advice column that can be used in a dynamic lookup table.
-    pub fn dlookup_table_column(&mut self) -> DynamicTableColumn {
-        DynamicTableColumn {
-            inner: self.advice_column(),
+    pub fn dlookup_table_column(&mut self) -> (DynamicTableColumn, TagColumn) {
+        if self.num_dlookup_columns == 0 {
+            self.tag_column = Some(self.fixed_column().into());
         }
+        self.num_dlookup_columns += 1;
+        let dtc = DynamicTableColumn {
+            inner: self.advice_column(),
+        };
+        (dtc, self.tag_column.unwrap())
     }
 
     /// Allocate a new fixed column

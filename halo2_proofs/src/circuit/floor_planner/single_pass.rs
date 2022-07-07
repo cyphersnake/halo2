@@ -178,29 +178,12 @@ impl<'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for SingleChipLayouter<'a
             assignment(table.into(), table_height)
         }?;
         self.dynamic_table_height = old_height + table_height;
+        self.tables.push(TableSlice {
+            start_row: old_height,
+            table_height,
+        });
         let default_and_assigned = dtable.default_and_assigned;
         self.cs.exit_region();
-
-        // Check that all table columns have the same length `first_unused`,
-        // and all cells up to that length are assigned.
-        let first_unused = {
-            match default_and_assigned
-                .values()
-                .map(|(_, assigned)| {
-                    if assigned.iter().all(|b| *b) {
-                        Some(assigned.len())
-                    } else {
-                        None
-                    }
-                })
-                .reduce(|acc, item| match (acc, item) {
-                    (Some(a), Some(b)) if a == b => Some(a),
-                    _ => None,
-                }) {
-                Some(Some(len)) => len,
-                _ => return Err(Error::Synthesis), // TODO better error
-            }
-        };
 
         // Record these columns so that we can prevent them from being used again.
         for column in default_and_assigned.keys() {
@@ -449,12 +432,12 @@ type DefaultTableValue<F> = Option<Value<Assigned<F>>>;
 pub struct TableSlice {
     start_row: usize,
     table_height: usize,
-    table_width: usize,
 }
 
 pub(crate) struct SimpleDynamicTableLayouter<'r, 'a, F: Field, CS: Assignment<F> + 'a> {
     cs: &'a mut CS,
     used_columns: &'r [DynamicTableColumn],
+    // TODO: don't need hashmap here for dynamic lookup table
     pub(crate) default_and_assigned: HashMap<DynamicTableColumn, (DefaultTableValue<F>, Vec<bool>)>,
     max_width: usize, // maximum width for stacked table slice
 }
