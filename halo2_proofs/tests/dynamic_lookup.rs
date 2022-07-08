@@ -4,16 +4,22 @@
 use std::marker::PhantomData;
 
 use halo2_proofs::circuit::Value;
-use halo2_proofs::pasta::Fp;
+use halo2_proofs::pasta::{Eq, EqAffine, Fp};
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{Layouter, SimpleFloorPlanner},
     dev::MockProver,
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance, Selector},
+    plonk::{
+        create_proof, keygen_pk, keygen_vk, verify_proof, Advice, Circuit, Column,
+        ConstraintSystem, Error, Instance, Selector, SingleVerifier,
+    },
+    poly::commitment::Params,
     poly::Rotation,
+    transcript::{Blake2bRead, Blake2bWrite, Challenge255},
 };
+use rand_core::OsRng;
 
-#[cfg(feature = "dev-graph")]
+//#[cfg(feature = "dev-graph")]
 #[test]
 fn lookup_dynamic() {
     #[derive(Clone, Debug)]
@@ -121,7 +127,7 @@ fn lookup_dynamic() {
         }
     }
 
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     struct MyCircuit<F: FieldExt> {
         even_lookup: Vec<F>,
         even_witnesses: Vec<Value<F>>,
@@ -171,15 +177,15 @@ fn lookup_dynamic() {
     }
 
     // Run MockProver.
-    let k = 4;
+    let k = 7;
 
     // Prepare the private and public inputs to the circuit.
     let even_lookup = vec![
-        Fp::from(0),
         Fp::from(2),
         Fp::from(4),
         Fp::from(6),
         Fp::from(8),
+        Fp::from(10),
     ];
     let odd_lookup = vec![
         Fp::from(1),
@@ -189,14 +195,26 @@ fn lookup_dynamic() {
         Fp::from(9),
     ];
     let even_witnesses = vec![
-        Value::known(Fp::from(0)),
+        Value::known(Fp::from(0)), // cheat with 0, break soundness
         Value::known(Fp::from(2)),
+        Value::known(Fp::from(4)),
+        Value::known(Fp::from(4)),
+        Value::known(Fp::from(4)),
+        Value::known(Fp::from(4)),
+        Value::known(Fp::from(4)),
+        Value::known(Fp::from(4)),
         Value::known(Fp::from(4)),
     ];
     let odd_witnesses = vec![
         Value::known(Fp::from(1)),
         Value::known(Fp::from(3)),
         Value::known(Fp::from(5)),
+        Value::known(Fp::from(5)),
+        Value::known(Fp::from(5)),
+        Value::known(Fp::from(5)),
+        Value::known(Fp::from(5)),
+        Value::known(Fp::from(5)),
+        Value::known(Fp::from(0)), // cheat with 0, break soundness
     ];
 
     // Instantiate the circuit with the private inputs.
@@ -218,21 +236,48 @@ fn lookup_dynamic() {
     }
 
     // Given the correct public input, our circuit will verify.
-    let prover = MockProver::run(k, &circuit, vec![odd_lookup]).unwrap();
-    assert_eq!(prover.verify(), Ok(()));
+    //    let prover = MockProver::run(k, &circuit, vec![odd_lookup]).unwrap();
+    //    assert_eq!(prover.verify(), Ok(()));
 
-    use plotters::prelude::*;
     // If we pass in a public input containing only even numbers,
     // the odd number lookup will fail.
-    let prover = MockProver::run(k, &circuit, vec![even_lookup]).unwrap();
-    assert!(prover.verify().is_err());
+    //    let prover = MockProver::run(k, &circuit, vec![even_lookup]).unwrap();
+    //    assert!(prover.verify().is_err());
 
-    let root = BitMapBackend::new("lookup-any-layout.png", (1024, 3096)).into_drawing_area();
-    root.fill(&WHITE).unwrap();
-    let root = root
-        .titled("lookup any layout", ("sans-serif", 60))
-        .unwrap();
-    halo2_proofs::dev::CircuitLayout::default()
-        .render(4, &circuit, &root)
-        .unwrap();
+    let params = Params::<EqAffine>::new(k);
+    let vk = keygen_vk(&params, &circuit).expect("keygen_vk should not fail");
+    let pk = keygen_pk(&params, vk, &circuit).expect("keygen_pk should not fail");
+    let input_odd = &[&odd_lookup[..]];
+    let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+    create_proof(
+        &params,
+        &pk,
+        &[circuit.clone()],
+        &[&input_odd[..]],
+        OsRng,
+        &mut transcript,
+    )
+    .expect("even proof generation should not fail");
+    let proof = transcript.finalize();
+    // Verify the proof
+    let strategy = SingleVerifier::new(&params);
+    let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+    let res = verify_proof(
+        &params,
+        pk.get_vk(),
+        strategy,
+        &[&input_odd[..]],
+        &mut transcript,
+    );
+    println!("{:?}", res);
+
+    //    use plotters::prelude::*;
+    //    let root = BitMapBackend::new("lookup-any-layout.png", (1024, 3096)).into_drawing_area();
+    //    root.fill(&WHITE).unwrap();
+    //    let root = root
+    //        .titled("lookup any layout", ("sans-serif", 60))
+    //        .unwrap();
+    //    halo2_proofs::dev::CircuitLayout::default()
+    //        .render(4, &circuit, &root)
+    //        .unwrap();
 }
