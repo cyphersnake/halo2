@@ -945,6 +945,7 @@ pub struct ConstraintSystem<F: Field> {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct PinnedConstraintSystem<'a, F: Field> {
+    //chao: for structure with reference field, need add lifetime
     num_fixed_columns: &'a usize,
     num_advice_columns: &'a usize,
     num_instance_columns: &'a usize,
@@ -1198,9 +1199,14 @@ impl<F: Field> ConstraintSystem<F> {
     ///
     /// A gate is required to contain polynomial constraints. This method will panic if
     /// `constraints` returns an empty iterator.
+    /// chao: first create new VirtualCells vc,
+    /// call constraints closure on input vc to update vc and cs's arrays
+    /// create gate (might contain multiple constraints)
+    /// finally add new gate to self.gates
     pub fn create_gate<C: Into<Constraint<F>>, Iter: IntoIterator<Item = C>>(
         &mut self,
         name: &'static str,
+        // chao: constraints is a closure function map VirtualCells to vector of constraints(type: (name, expr))
         constraints: impl FnOnce(&mut VirtualCells<'_, F>) -> Iter,
     ) {
         let mut cells = VirtualCells::new(self);
@@ -1210,7 +1216,7 @@ impl<F: Field> ConstraintSystem<F> {
 
         let (constraint_names, polys): (_, Vec<_>) = constraints
             .into_iter()
-            .map(|c| c.into())
+            .map(|c| c.into()) // chao: from Expr into Constraint which includes name str.
             .map(|c| (c.name, c.poly))
             .unzip();
 
@@ -1219,6 +1225,7 @@ impl<F: Field> ConstraintSystem<F> {
             "Gates must contain at least one constraint."
         );
 
+        // chao: gate might contain multiple constraints
         self.gates.push(Gate {
             name,
             constraint_names,

@@ -101,6 +101,11 @@ impl<F: FieldExt> Argument<F> {
         C::Curve: Mul<F, Output = C::Curve> + MulAssign<F>,
     {
         // Closure to get values of expressions and compress them
+        // chao: this closure will return (unpermuted_expressions, unpermuted_cosets,
+        // compressed_permutation),
+        // unpermuted_expressions are evaluated columns: [A_0,A_1,...,A_{m-1}], each A_j is a column (evaluation of polynomial on H)
+        // unpermuted_cosets are not evaluated but just parse as poly::Ast
+        // compressed_permutation: theta^{m-1}*A_0+...+A_{m-1}, just one column now (evaluation of poly on H)
         let compress_expressions = |expressions: &[Expression<C::Scalar>]| {
             // Values of input expressions involved in the lookup
             let unpermuted_expressions: Vec<_> = expressions
@@ -270,11 +275,11 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
             {
                 *lookup_product = (*beta + permuted_input_value) * &(*gamma + permuted_table_value);
             }
-        });
+        }); // chao: loop over row, now lookup_product = [(a'+beta)(s'+gamma)]_{j=0..n}
 
         // Batch invert to obtain the denominators for the lookup product
         // polynomials
-        lookup_product.iter_mut().batch_invert();
+        lookup_product.iter_mut().batch_invert(); // chao: now lookup_product = [1/((a'+beta)(s'+gamma))]_{j=0..n}
 
         // Finish the computation of the entire fraction by computing the numerators
         // (\theta^{m-1} a_0(\omega^i) + \theta^{m-2} a_1(\omega^i) + ... + \theta a_{m-2}(\omega^i) + a_{m-1}(\omega^i) + \beta)
@@ -300,7 +305,7 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
                 *product *= &(input_term + &*beta);
                 *product *= &(table_term + &*gamma);
             }
-        });
+        }); // chao: now lookup_product=[(sum_i(theta^{m-i}*a_i)+beta)(sum_i(theta^{m-1}*s_i)+gamma)/((a'+beta)(s'+gamma))]_{j=0..n}
 
         // The product vector is a vector of products of fractions of the form
         //
@@ -320,8 +325,8 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         let z = iter::once(C::Scalar::one())
             .chain(lookup_product)
             .scan(C::Scalar::one(), |state, cur| {
-                *state *= &cur;
-                Some(*state)
+                *state *= &cur; // chao: scan will map iterator to another iterator while state is shared
+                Some(*state) // i.e. map [a,b,c,...] to [f(s,a), f(a,b,s), f(a,b,c,s),...]
             })
             // Take all rows including the "last" row which should
             // be a boolean (and ideally 1, else soundness is broken)
@@ -329,7 +334,9 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
             // Chain random blinding factors.
             .chain((0..blinding_factors).map(|_| C::Scalar::random(&mut rng)))
             .collect::<Vec<_>>();
-        assert_eq!(z.len(), params.n as usize);
+        assert_eq!(z.len(), params.n as usize); // chao: lookup_product=[x1/y1,x2/y2,...,xn/yn], then z=[1,x1/y1,x1*x2/(y1*y2),...,1,b1,b2,..];
+                                                //("last" term should be 1; bi is blinding factor)
+                                                // z is just one column representing evaluation of poly on H_ext (extend for blinding factor)
         let z = pk.vk.domain.lagrange_from_vec(z);
 
         #[cfg(feature = "sanity-checks")]
@@ -378,7 +385,7 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         }
 
         let product_blind = Blind(C::Scalar::random(rng));
-        let product_commitment = params.commit_lagrange(&z, product_blind).to_affine();
+        let product_commitment = params.commit_lagrange(&z, product_blind).to_affine(); // chao: kate commitment over g_lagrange
         let z = pk.vk.domain.lagrange_to_coeff(z);
         let product_coset = evaluator.register_poly(pk.vk.domain.coeff_to_extended(z.clone()));
 
