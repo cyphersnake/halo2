@@ -327,7 +327,7 @@ pub fn create_proof<
                 .map(|poly| domain.coeff_to_extended(poly.clone()))
                 .collect();
 
-            Ok(AdviceSingle {
+            Ok(AdviceSingle { // chao: AdviceSingle is all advice columns for one circuit
                 advice_values: advice,
                 advice_polys,
                 advice_cosets,
@@ -340,6 +340,8 @@ pub fn create_proof<
     let mut value_evaluator = poly::new_evaluator(|| {});
 
     // Register fixed values with the polynomial evaluator.
+    // chao: value_evaluator contains the fixed poly values after register
+    // will be used to construct h_poly
     let fixed_values: Vec<_> = pk
         .fixed_values
         .iter()
@@ -351,9 +353,10 @@ pub fn create_proof<
         .iter()
         .map(|advice| {
             advice
-                .advice_values
+                .advice_values // chao: multiple advice columns here
                 .iter()
-                .map(|poly| value_evaluator.register_poly(poly.clone()))
+                .map(|poly| value_evaluator.register_poly(poly.clone())) // chao: poly corresponds
+                                                                         // to one column
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -540,6 +543,7 @@ pub fn create_proof<
         })
         .unzip();
 
+    // chao: these are custom gates, lookup, permutations that used to construct h_poly
     let expressions = advice_cosets
         .iter()
         .zip(instance_cosets.iter())
@@ -585,6 +589,7 @@ pub fn create_proof<
         );
 
     // Construct the vanishing argument's h(X) commitments
+    // chao: coset_evaluator is used to construct h_poly
     let vanishing = vanishing.construct(
         params,
         domain,
@@ -674,6 +679,7 @@ pub fn create_proof<
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    //chao: query polys at given points (may have rotation)
     let instances = instance
         .iter()
         .zip(advice.iter())

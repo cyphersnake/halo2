@@ -36,6 +36,7 @@ where
     let mut cs = ConstraintSystem::default();
     let config = ConcreteCircuit::configure(&mut cs);
 
+    // chao: permutation=3, lookup=4 (for now), custom_gate depends
     let degree = cs.degree();
 
     let domain = EvaluationDomain::new(degree as u32, params.k);

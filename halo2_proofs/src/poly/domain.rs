@@ -39,6 +39,10 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     /// values $j, k$.
     pub fn new(j: u32, k: u32) -> Self {
         // quotient_poly_degree * params.n - 1 is the degree of the quotient polynomial
+        // chao: deg(q) = deq(numerator) - deg(t(X)) = j*n - n = (j-1)*n
+        // why (j-1)*n - 1 ?
+        // numerator is determined by n=2^k rows, t(X) formula is known, 
+        // determine the q, we use cosetFFT, which need deg(q)+1 points
         let quotient_poly_degree = (j - 1) as u64;
 
         // n = 2^k
@@ -82,6 +86,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         let g_coset = F::ZETA;
         let g_coset_inv = g_coset.square();
 
+        // chao: break when omg_e^{i*n}=1 => i*n=i*2^k=2^{k_e} => i = 2^{k_e-k} 
         let mut t_evaluations = Vec::with_capacity(1 << (extended_k - k));
         {
             // Compute the evaluations of t(X) = X^n - 1 in the coset evaluation domain.
@@ -90,7 +95,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
             let step = extended_omega.pow_vartime([n, 0, 0, 0]);
             let mut cur = orig;
             loop {
-                t_evaluations.push(cur);
+                t_evaluations.push(cur); // chao: eval of t(x) at extended domain, t[i] = t(zeta*omg_e^i) = zeta^n*omg_e^{i*n} - 1
                 cur *= &step;
                 if cur == orig {
                     break;
@@ -107,11 +112,12 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
             // We invert in a batch, below.
         }
 
-        let mut ifft_divisor = F::from(1 << k); // Inversion computed later
+        let mut ifft_divisor = F::from(1 << k); // Inversion computed later, chao: n here, ifft need 1/n
         let mut extended_ifft_divisor = F::from(1 << extended_k); // Inversion computed later
 
         // The barycentric weight of 1 over the evaluation domain
         // 1 / \prod_{i != 0} (1 - omega^i)
+        // chao: l_i(\omega^i) = \prod_{i!=0}(1-omega^i = n
         let mut barycentric_weight = F::from(n); // Inversion computed later
 
         // Compute batch inversion
